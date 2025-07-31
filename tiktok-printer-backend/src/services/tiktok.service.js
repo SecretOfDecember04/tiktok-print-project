@@ -1,254 +1,209 @@
-const WebSocket = require('ws');
-const EventEmitter = require('events');
+// src/services/tiktok.service.js
+const axios = require('axios');
+const crypto = require('crypto');
 const logger = require('../utils/logger');
-const { getSupabase } = require('../config/supabase');
-const { emitToShop } = require('./websocket.service');
-const notifier = require('node-notifier');
 
-class TikTokLiveService extends EventEmitter {
+class TikTokService {
   constructor() {
-    super();
-    this.connections = new Map(); // shopId -> WebSocket connection
-    this.reconnectAttempts = new Map();
+    this.appKey = process.env.TIKTOK_APP_KEY;
+    this.appSecret = process.env.TIKTOK_APP_SECRET;
+    this.redirectUri = process.env.TIKTOK_REDIRECT_URI;
+    this.apiBaseUrl = process.env.TIKTOK_API_BASE_URL || 'https://open-api.tiktokglobalshop.com';
   }
 
   /**
-   * Connect to TikTok Live Stream
+   * Generate OAuth authorization URL
    */
-  async connectToLiveStream(shopId, streamId, credentials) {
+  getAuthorizationUrl(state) {
+    const params = new URLSearchParams({
+      app_key: this.appKey,
+      state: state,
+      response_type: 'code',
+      redirect_uri: this.redirectUri
+    });
+
+    const authUrl = `https://auth.tiktok-shops.com/oauth/authorize?${params.toString()}`;
+
+    logger.debug('Generated auth URL', { authUrl });
+
+    return authUrl;
+  }
+
+  /**
+   * Exchange authorization code for access token
+   */
+  async exchangeCodeForToken(code) {
     try {
-      logger.info(`Connecting to TikTok live stream: ${streamId}`);
+      const params = {
+        app_key: this.appKey,
+        app_secret: this.appSecret,
+        auth_code: code,
+        grant_type: 'authorized_code'
+      };
 
-      // Close existing connection if any
-      this.disconnectFromLiveStream(shopId);
-
-      // TikTok Live WebSocket endpoint (this is a simulation - real endpoint would be different)
-      const wsUrl = `wss://live-api.tiktokglobalshop.com/live/v1/stream/${streamId}`;
-
-      const ws = new WebSocket(wsUrl, {
-        headers: {
-          'Authorization': `Bearer ${credentials.accessToken}`,
-          'X-Shop-Id': credentials.shopId,
-          'X-App-Key': credentials.appKey
-        }
-      });
-
-      ws.on('open', () => {
-        logger.info(`Connected to live stream for shop ${shopId}`);
-        this.connections.set(shopId, ws);
-        this.reconnectAttempts.set(shopId, 0);
-
-        // Send authentication
-        ws.send(JSON.stringify({
-          type: 'auth',
-          data: {
-            shopId: credentials.shopId,
-            appKey: credentials.appKey,
-            timestamp: Date.now()
+      const response = await axios.post(
+        'https://auth.tiktok-shops.com/api/v2/token/get',
+        params,
+        {
+          headers: {
+            'Content-Type': 'application/json'
           }
-        }));
-
-        // Notify frontend
-        emitToShop(shopId, 'live-stream-connected', { streamId });
-      });
-
-      ws.on('message', async (data) => {
-        try {
-          const message = JSON.parse(data.toString());
-          await this.handleLiveStreamMessage(shopId, message);
-        } catch (error) {
-          logger.error('Error parsing live stream message:', error);
         }
-      });
+      );
 
-      ws.on('error', (error) => {
-        logger.error(`Live stream error for shop ${shopId}:`, error);
-        emitToShop(shopId, 'live-stream-error', { error: error.message });
-      });
-
-      ws.on('close', () => {
-        logger.info(`Disconnected from live stream for shop ${shopId}`);
-        this.connections.delete(shopId);
-
-        // Attempt reconnection
-        this.attemptReconnect(shopId, streamId, credentials);
-      });
-
+      logger.info('Token exchange successful');
+      return response.data;
     } catch (error) {
-      logger.error('Failed to connect to live stream:', error);
+      logger.error('Token exchange failed:', error.response?.data || error.message);
       throw error;
     }
   }
 
   /**
-   * Handle incoming messages from TikTok Live Stream
+   * Refresh access token
    */
-  async handleLiveStreamMessage(shopId, message) {
-    const { type, data } = message;
-
-    switch (type) {
-      case 'order_created':
-        await this.handleInstantOrder(shopId, data);
-        break;
-
-      case 'viewer_joined':
-        emitToShop(shopId, 'viewer-joined', data);
-        break;
-
-      case 'comment':
-        emitToShop(shopId, 'live-comment', data);
-        break;
-
-      case 'product_clicked':
-        emitToShop(shopId, 'product-interest', data);
-        break;
-
-      case 'stream_stats':
-        emitToShop(shopId, 'stream-stats', data);
-        break;
-
-      default:
-        logger.debug(`Unknown live stream message type: ${type}`);
-    }
-  }
-
-  /**
-   * Handle instant order from live stream
-   */
-  async handleInstantOrder(shopId, orderData) {
+  async refreshToken(refreshToken) {
     try {
-      logger.info(`📦 INSTANT ORDER from live stream: ${orderData.order_id}`);
-
-      const supabase = getSupabase();
-
-      // Transform TikTok order data to our format
-      const order = {
-        shop_id: shopId,
-        platform_order_id: orderData.order_id,
-        order_number: orderData.order_number || `#${orderData.order_id.slice(-6)}`,
-        customer_name: orderData.buyer_info.name,
-        customer_email: orderData.buyer_info.email || null,
-        customer_phone: orderData.buyer_info.phone || null,
-        shipping_address: {
-          line1: orderData.shipping_address.address_line_1,
-          line2: orderData.shipping_address.address_line_2,
-          city: orderData.shipping_address.city,
-          state: orderData.shipping_address.state,
-          zip: orderData.shipping_address.postal_code,
-          country: orderData.shipping_address.country || 'US'
-        },
-        items: orderData.items.map(item => ({
-          product_id: item.product_id,
-          sku: item.sku_id,
-          name: item.product_name,
-          quantity: item.quantity,
-          price: item.price,
-          image: item.product_image
-        })),
-        order_total: orderData.total_amount,
-        currency: orderData.currency || 'USD',
-        status: 'pending',
-        platform_status: orderData.order_status,
-        platform_data: orderData,
-        priority: 'urgent' // Live orders are always urgent
+      const params = {
+        app_key: this.appKey,
+        app_secret: this.appSecret,
+        refresh_token: refreshToken,
+        grant_type: 'refresh_token'
       };
 
-      // Save to database
-      const { data: savedOrder, error } = await supabase
-        .from('orders')
-        .insert(order)
-        .select()
-        .single();
+      const response = await axios.post(
+        'https://auth.tiktok-shops.com/api/v2/token/refresh',
+        params,
+        {
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      );
 
-      if (error) throw error;
-
-      // Get shop settings
-      const { data: shop } = await supabase
-        .from('shops')
-        .select('settings')
-        .eq('id', shopId)
-        .single();
-
-      // Send instant print command if enabled
-      if (shop?.settings?.instantPrint) {
-        emitToShop(shopId, 'instant-print', {
-          order: savedOrder,
-          priority: 'URGENT',
-          source: 'live_stream'
-        });
-
-        // Desktop notification
-        notifier.notify({
-          title: '🔴 LIVE ORDER!',
-          message: `Order ${order.order_number} from ${order.customer_name}`,
-          sound: true,
-          wait: false
-        });
-      }
-
-      // Emit to frontend
-      emitToShop(shopId, 'live-order-received', savedOrder);
-
-      // Update shop stats
-      await supabase.rpc('increment_shop_orders', { shop_id: shopId });
-
-      logger.info(`✅ Live order ${order.order_number} processed and sent to printer`);
-
+      logger.info('Token refresh successful');
+      return response.data;
     } catch (error) {
-      logger.error('Failed to process instant order:', error);
-      emitToShop(shopId, 'order-error', { error: error.message });
+      logger.error('Token refresh failed:', error.response?.data || error.message);
+      throw error;
     }
   }
 
   /**
-   * Disconnect from live stream
+   * Get shop information
    */
-  disconnectFromLiveStream(shopId) {
-    const ws = this.connections.get(shopId);
-    if (ws) {
-      ws.close();
-      this.connections.delete(shopId);
-      logger.info(`Disconnected from live stream for shop ${shopId}`);
+  async getShopInfo(accessToken) {
+    try {
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const path = '/shop/202309/shops';
+      const params = {
+        app_key: this.appKey,
+        timestamp: timestamp,
+        version: '202309'
+      };
+
+      // Generate signature
+      const signature = this.generateSignature(path, params, '');
+
+      const response = await axios.get(
+        `${this.apiBaseUrl}${path}`,
+        {
+          params: {
+            ...params,
+            sign: signature
+          },
+          headers: {
+            'x-tts-access-token': accessToken,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      logger.info('Shop info retrieved successfully');
+      return response.data;
+    } catch (error) {
+      logger.error('Get shop info failed:', error.response?.data || error.message);
+      throw error;
     }
   }
 
   /**
-   * Attempt to reconnect to live stream
+   * Get orders from TikTok Shop
    */
-  async attemptReconnect(shopId, streamId, credentials) {
-    const attempts = this.reconnectAttempts.get(shopId) || 0;
+  async getOrders(accessToken, shopId, params = {}) {
+    try {
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const path = '/order/202309/orders/search';
 
-    if (attempts < 5) {
-      const delay = Math.min(1000 * Math.pow(2, attempts), 30000); // Exponential backoff
+      const queryParams = {
+        app_key: this.appKey,
+        timestamp: timestamp,
+        shop_id: shopId,
+        version: '202309',
+        ...params
+      };
 
-      logger.info(`Attempting to reconnect to live stream in ${delay}ms...`);
+      // Generate signature
+      const signature = this.generateSignature(path, queryParams, '');
 
-      setTimeout(() => {
-        this.reconnectAttempts.set(shopId, attempts + 1);
-        this.connectToLiveStream(shopId, streamId, credentials);
-      }, delay);
-    } else {
-      logger.error(`Failed to reconnect to live stream after 5 attempts`);
-      emitToShop(shopId, 'live-stream-failed', {
-        error: 'Connection lost. Please restart live mode.'
-      });
+      const response = await axios.post(
+        `${this.apiBaseUrl}${path}`,
+        params,
+        {
+          params: {
+            app_key: this.appKey,
+            timestamp: timestamp,
+            version: '202309',
+            sign: signature
+          },
+          headers: {
+            'x-tts-access-token': accessToken,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      logger.error('Get orders failed:', error.response?.data || error.message);
+      throw error;
     }
   }
 
   /**
-   * Get live stream status
+   * Generate signature for TikTok API requests
    */
-  isConnected(shopId) {
-    return this.connections.has(shopId);
+  generateSignature(path, params, body) {
+    // Sort parameters alphabetically
+    const sortedParams = Object.keys(params)
+      .sort()
+      .map((key) => `${key}${params[key]}`)
+      .join('');
+
+    // Construct string to sign
+    const stringToSign = `${this.appSecret}${path}${sortedParams}${body}${this.appSecret}`;
+
+    // Generate SHA256 hash
+    const signature = crypto
+      .createHash('sha256')
+      .update(stringToSign)
+      .digest('hex');
+
+    return signature;
   }
 
   /**
-   * Get all active connections
+   * Verify webhook signature
    */
-  getActiveConnections() {
-    return Array.from(this.connections.keys());
+  verifyWebhookSignature(signature, timestamp, body) {
+    const payload = `${this.appSecret}${timestamp}${JSON.stringify(body)}${this.appSecret}`;
+    const expectedSignature = crypto
+      .createHash('sha256')
+      .update(payload)
+      .digest('hex');
+
+    return signature === expectedSignature;
   }
 }
 
-// Export singleton instance
-module.exports = new TikTokLiveService();
+module.exports = new TikTokService();

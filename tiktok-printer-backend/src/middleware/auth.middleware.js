@@ -11,6 +11,17 @@ async function authenticate(req, res, next) {
 
     const token = authHeader.split('Bearer ')[1];
 
+    // ===== TEMPORARY TEST TOKEN - REMOVE IN PRODUCTION =====
+    if (token === 'test-token-123') {
+      req.user = {
+        uid: 'test-user-001',
+        email: 'test@example.com',
+        emailVerified: true
+      };
+      return next();
+    }
+    // ===== END OF TEST TOKEN =====
+
     // Verify Firebase ID token
     const decodedToken = await getAuth().verifyIdToken(token);
 

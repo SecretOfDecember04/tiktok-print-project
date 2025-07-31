@@ -5,9 +5,16 @@ const authRoutes = require('./auth.routes');
 const shopRoutes = require('./shop.routes');
 const orderRoutes = require('./order.routes');
 const templateRoutes = require('./template.routes');
+const webhookRoutes = require('./webhook.routes');
 
 // Public routes
 router.use('/auth', authRoutes);
+
+// Webhook routes (public but verified by signature)
+router.use('/webhooks', webhookRoutes);
+
+// TikTok OAuth callback is public (verified by state)
+router.use('/shops/callback/tiktok', shopRoutes);
 
 // Protected routes (all routes below require authentication)
 const { authenticate } = require('../middleware/auth.middleware');
@@ -25,7 +32,8 @@ router.get('/', (req, res) => {
       auth: '/api/auth',
       shops: '/api/shops',
       orders: '/api/orders',
-      templates: '/api/templates'
+      templates: '/api/templates',
+      webhooks: '/api/webhooks'
     }
   });
 });

@@ -38,28 +38,28 @@ router.post('/tiktok', async (req, res) => {
     logger.info(`TikTok webhook received: ${type}`);
 
     switch (type) {
-      case 'order.created':
-        await handleOrderCreated(shop_id, data);
-        break;
+    case 'order.created':
+      await handleOrderCreated(shop_id, data);
+      break;
 
-      case 'order.updated':
-        await handleOrderUpdated(shop_id, data);
-        break;
+    case 'order.updated':
+      await handleOrderUpdated(shop_id, data);
+      break;
 
-      case 'order.cancelled':
-        await handleOrderCancelled(shop_id, data);
-        break;
+    case 'order.cancelled':
+      await handleOrderCancelled(shop_id, data);
+      break;
 
-      case 'live.started':
-        await handleLiveStreamStarted(shop_id, data);
-        break;
+    case 'live.started':
+      await handleLiveStreamStarted(shop_id, data);
+      break;
 
-      case 'live.ended':
-        await handleLiveStreamEnded(shop_id, data);
-        break;
+    case 'live.ended':
+      await handleLiveStreamEnded(shop_id, data);
+      break;
 
-      default:
-        logger.warn(`Unknown webhook type: ${type}`);
+    default:
+      logger.warn(`Unknown webhook type: ${type}`);
     }
 
     // Always respond quickly to webhooks
@@ -118,7 +118,7 @@ async function handleOrderCreated(shopId, orderData) {
         zip: orderData.recipient_zipcode,
         country: orderData.recipient_country || 'US'
       },
-      items: orderData.item_list.map(item => ({
+      items: orderData.item_list.map((item) => ({
         product_id: item.product_id,
         sku: item.sku_id,
         name: item.product_name,
@@ -181,3 +181,149 @@ async function handleOrderUpdated(shopId, orderData) {
       .from('orders')
       .update({
         platform_status: orderData.order_status,
+        platform_data: orderData,
+        updated_at: new Date().toISOString()
+      })
+      .eq('platform_order_id', orderData.order_id);
+
+    if (error) throw error;
+
+    // Find the order to emit update
+    const { data: order } = await supabase
+      .from('orders')
+      .select('*, shop:shops(*)')
+      .eq('platform_order_id', orderData.order_id)
+      .single();
+
+    if (order && order.shop) {
+      // Notify frontend of update
+      emitToShop(order.shop.id, 'order-updated', order);
+    }
+
+    logger.info(`Order ${orderData.order_id} updated via webhook`);
+
+  } catch (error) {
+    logger.error('Failed to handle order updated webhook:', error);
+  }
+}
+
+/**
+ * Handle order cancellation
+ */
+async function handleOrderCancelled(shopId, orderData) {
+  try {
+    const supabase = getSupabase();
+
+    const { error } = await supabase
+      .from('orders')
+      .update({
+        status: 'cancelled',
+        platform_status: 'cancelled',
+        updated_at: new Date().toISOString()
+      })
+      .eq('platform_order_id', orderData.order_id);
+
+    if (error) throw error;
+
+    // Find the order to emit update
+    const { data: order } = await supabase
+      .from('orders')
+      .select('*, shop:shops(*)')
+      .eq('platform_order_id', orderData.order_id)
+      .single();
+
+    if (order && order.shop) {
+      // Notify frontend of cancellation
+      emitToShop(order.shop.id, 'order-cancelled', order);
+    }
+
+    logger.info(`Order ${orderData.order_id} cancelled via webhook`);
+
+  } catch (error) {
+    logger.error('Failed to handle order cancelled webhook:', error);
+  }
+}
+
+/**
+ * Handle live stream started
+ */
+async function handleLiveStreamStarted(shopId, streamData) {
+  try {
+    const supabase = getSupabase();
+
+    // Update shop to live mode
+    const { error } = await supabase
+      .from('shops')
+      .update({
+        is_live: true,
+        live_stream_id: streamData.stream_id,
+        updated_at: new Date().toISOString()
+      })
+      .eq('shop_id', shopId);
+
+    if (error) throw error;
+
+    // Get shop details
+    const { data: shop } = await supabase
+      .from('shops')
+      .select('*')
+      .eq('shop_id', shopId)
+      .single();
+
+    if (shop) {
+      // Notify frontend
+      emitToShop(shop.id, 'live-stream-started', {
+        stream_id: streamData.stream_id,
+        started_at: new Date().toISOString()
+      });
+    }
+
+    logger.info(`Live stream started for shop ${shopId}`);
+
+  } catch (error) {
+    logger.error('Failed to handle live stream started:', error);
+  }
+}
+
+/**
+ * Handle live stream ended
+ */
+async function handleLiveStreamEnded(shopId, streamData) {
+  try {
+    const supabase = getSupabase();
+
+    // Update shop to normal mode
+    const { error } = await supabase
+      .from('shops')
+      .update({
+        is_live: false,
+        live_stream_id: null,
+        updated_at: new Date().toISOString()
+      })
+      .eq('shop_id', shopId);
+
+    if (error) throw error;
+
+    // Get shop details
+    const { data: shop } = await supabase
+      .from('shops')
+      .select('*')
+      .eq('shop_id', shopId)
+      .single();
+
+    if (shop) {
+      // Notify frontend
+      emitToShop(shop.id, 'live-stream-ended', {
+        stream_id: streamData.stream_id,
+        ended_at: new Date().toISOString()
+      });
+    }
+
+    logger.info(`Live stream ended for shop ${shopId}`);
+
+  } catch (error) {
+    logger.error('Failed to handle live stream ended:', error);
+  }
+}
+
+module.exports = router;

@@ -1,5 +1,7 @@
 const router = require('express').Router();
 const { getSupabase } = require('../config/supabase');
+const OrderService = require('../services/order.service');
+const { pollShopOrdersManually } = require('../workers/orderPoller');
 const logger = require('../utils/logger');
 
 /**
@@ -63,6 +65,87 @@ router.get('/', async (req, res) => {
 });
 
 /**
+ * @route   GET /api/orders/shop/:shopId
+ * @desc    Get orders for a specific shop
+ * @access  Private
+ */
+router.get('/shop/:shopId', async (req, res) => {
+  try {
+    const { shopId } = req.params;
+    const { status, priority, limit } = req.query;
+    
+    const filters = {
+      status,
+      priority,
+      limit: limit ? parseInt(limit) : undefined
+    };
+
+    const orders = await OrderService.getOrdersByShop(shopId, filters);
+    res.json(orders);
+  } catch (error) {
+    logger.error('Error fetching shop orders:', error);
+    res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+});
+
+/**
+ * @route   POST /api/orders/sync/:shopId
+ * @desc    Manually sync orders from TikTok
+ * @access  Private
+ */
+router.post('/sync/:shopId', async (req, res) => {
+  try {
+    const { shopId } = req.params;
+    
+    // Verify shop belongs to user
+    const supabase = getSupabase();
+    const { data: user } = await supabase
+      .from('users')
+      .select('id')
+      .eq('firebase_uid', req.user.uid)
+      .single();
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const { data: shop } = await supabase
+      .from('shops')
+      .select('id')
+      .eq('id', shopId)
+      .eq('user_id', user.id)
+      .single();
+
+    if (!shop) {
+      return res.status(404).json({ error: 'Shop not found' });
+    }
+
+    // Sync orders
+    const result = await pollShopOrdersManually(shopId);
+    res.json(result);
+  } catch (error) {
+    logger.error('Error syncing orders:', error);
+    res.status(500).json({ error: 'Failed to sync orders' });
+  }
+});
+
+/**
+ * @route   GET /api/orders/stats/:shopId
+ * @desc    Get order statistics for a shop
+ * @access  Private
+ */
+router.get('/stats/:shopId', async (req, res) => {
+  try {
+    const { shopId } = req.params;
+    const stats = await OrderService.getOrderStats(shopId);
+    res.json(stats);
+  } catch (error) {
+    logger.error('Error fetching order stats:', error);
+    res.status(500).json({ error: 'Failed to fetch order stats' });
+  }
+});
+
+/**
  * @route   POST /api/orders/:id/print
  * @desc    Mark order as printed
  * @access  Private
@@ -70,28 +153,58 @@ router.get('/', async (req, res) => {
 router.post('/:id/print', async (req, res) => {
   try {
     const { id } = req.params;
+    
+    // Get user's Supabase ID for verification
     const supabase = getSupabase();
-
-    // Update order status
-    const { data: order, error } = await supabase
-      .from('orders')
-      .update({
-        status: 'printed',
-        print_status: 'printed',
-        printed_at: new Date().toISOString(),
-        printed_by: req.user.email
-      })
-      .eq('id', id)
-      .select()
+    const { data: user } = await supabase
+      .from('users')
+      .select('id')
+      .eq('firebase_uid', req.user.uid)
       .single();
 
-    if (error) throw error;
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-    logger.info(`Order printed: ${id}`);
+    const order = await OrderService.markAsPrinted(id, user.id);
     res.json(order);
   } catch (error) {
-    logger.error('Error updating order:', error);
-    res.status(500).json({ error: 'Failed to update order' });
+    logger.error('Error marking order as printed:', error);
+    res.status(500).json({ error: 'Failed to mark order as printed' });
+  }
+});
+
+/**
+ * @route   PUT /api/orders/:id/status
+ * @desc    Update order status
+ * @access  Private
+ */
+router.put('/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!status) {
+      return res.status(400).json({ error: 'Status is required' });
+    }
+
+    // Get user's Supabase ID for verification
+    const supabase = getSupabase();
+    const { data: user } = await supabase
+      .from('users')
+      .select('id')
+      .eq('firebase_uid', req.user.uid)
+      .single();
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const order = await OrderService.updateOrderStatus(id, status, user.id);
+    res.json(order);
+  } catch (error) {
+    logger.error('Error updating order status:', error);
+    res.status(500).json({ error: 'Failed to update order status' });
   }
 });
 

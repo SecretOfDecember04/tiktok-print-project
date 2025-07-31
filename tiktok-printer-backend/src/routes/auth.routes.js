@@ -153,4 +153,75 @@ router.get('/subscription', authenticate, async (req, res) => {
   }
 });
 
+// ===== TEMPORARY TEST ENDPOINTS - REMOVE IN PRODUCTION =====
+
+/**
+ * @route   POST /api/auth/test-token
+ * @desc    Get a test token for development
+ * @access  Public (TEST ONLY)
+ */
+router.post('/test-token', async (req, res) => {
+  const testToken = 'test-token-123';
+  res.json({
+    token: testToken,
+    instructions: 'Use this in Authorization: Bearer test-token-123',
+    warning: 'This is for testing only - remove in production!'
+  });
+});
+
+/**
+ * @route   POST /api/auth/test-user
+ * @desc    Create a test user directly in Supabase
+ * @access  Public (TEST ONLY)
+ */
+router.post('/test-user', async (req, res) => {
+  try {
+    const supabase = getSupabase();
+    const testUid = 'test-user-001';
+    const testEmail = 'test@example.com';
+
+    // Check if test user already exists
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('firebase_uid', testUid)
+      .single();
+
+    if (existingUser) {
+      return res.json({
+        message: 'Test user already exists',
+        user: existingUser,
+        token: 'test-token-123'
+      });
+    }
+
+    // Create test user
+    const { data: newUser, error } = await supabase
+      .from('users')
+      .insert({
+        firebase_uid: testUid,
+        email: testEmail,
+        full_name: 'Test User',
+        subscription_status: 'trial',
+        subscription_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({
+      message: 'Test user created',
+      user: newUser,
+      token: 'test-token-123',
+      instructions: 'Use Authorization: Bearer test-token-123 for API calls'
+    });
+  } catch (error) {
+    logger.error('Test user creation error:', error);
+    res.status(500).json({ error: 'Failed to create test user' });
+  }
+});
+
+// ===== END OF TEST ENDPOINTS =====
+
 module.exports = router;
