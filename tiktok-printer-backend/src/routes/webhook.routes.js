@@ -1,329 +1,278 @@
 const router = require('express').Router();
-const crypto = require('crypto');
 const { getSupabase } = require('../config/supabase');
+const tiktokService = require('../services/tiktok.service');
 const logger = require('../utils/logger');
-const { emitToShop } = require('../services/websocket.service');
 
 /**
- * Verify TikTok webhook signature
- */
-function verifyTikTokSignature(req, secret) {
-  const signature = req.headers['x-tiktok-signature'];
-  if (!signature) return false;
-
-  const payload = JSON.stringify(req.body);
-  const expectedSignature = crypto
-    .createHmac('sha256', secret)
-    .update(payload)
-    .digest('hex');
-
-  return signature === expectedSignature;
-}
-
-/**
- * @route   POST /api/webhooks/tiktok
- * @desc    Handle TikTok webhooks for instant order notifications
+ * @route   POST /api/webhooks/tiktok/orders
+ * @desc    Receive order notifications from TikTok
  * @access  Public (but verified by signature)
  */
-router.post('/tiktok', async (req, res) => {
+router.post('/tiktok/orders', async (req, res) => {
   try {
+    const signature = req.headers['x-tts-signature'];
+    const timestamp = req.headers['x-tts-timestamp'];
+    const body = req.body;
+
     // Verify webhook signature
-    // const isValid = verifyTikTokSignature(req, process.env.TIKTOK_WEBHOOK_SECRET);
-    // if (!isValid) {
-    //   return res.status(401).json({ error: 'Invalid signature' });
-    // }
-
-    const { type, shop_id, data, timestamp } = req.body;
-
-    logger.info(`TikTok webhook received: ${type}`);
-
-    switch (type) {
-    case 'order.created':
-      await handleOrderCreated(shop_id, data);
-      break;
-
-    case 'order.updated':
-      await handleOrderUpdated(shop_id, data);
-      break;
-
-    case 'order.cancelled':
-      await handleOrderCancelled(shop_id, data);
-      break;
-
-    case 'live.started':
-      await handleLiveStreamStarted(shop_id, data);
-      break;
-
-    case 'live.ended':
-      await handleLiveStreamEnded(shop_id, data);
-      break;
-
-    default:
-      logger.warn(`Unknown webhook type: ${type}`);
+    if (!tiktokService.verifyWebhookSignature(signature, timestamp, body)) {
+      logger.warn('Invalid webhook signature');
+      return res.status(401).json({ error: 'Invalid signature' });
     }
 
-    // Always respond quickly to webhooks
-    res.status(200).json({ received: true });
+    // Process different event types
+    const { event_type, data } = body;
+
+    logger.info(`Webhook received: ${event_type}`, {
+      orderId: data?.order_id,
+      shopId: data?.shop_id
+    });
+
+    const supabase = getSupabase();
+
+    switch (event_type) {
+      case 'ORDER_CREATED':
+      case 'PACKAGE_CREATED':
+        await handleNewOrder(supabase, data);
+        break;
+
+      case 'ORDER_STATUS_CHANGED':
+        await handleOrderStatusChange(supabase, data);
+        break;
+
+      case 'PACKAGE_SHIPPED':
+        await handleOrderShipped(supabase, data);
+        break;
+
+      case 'ORDER_CANCELLED':
+        await handleOrderCancelled(supabase, data);
+        break;
+
+      default:
+        logger.info(`Unhandled webhook event: ${event_type}`);
+    }
+
+    // Always return 200 to acknowledge receipt
+    res.status(200).json({ success: true });
 
   } catch (error) {
     logger.error('Webhook processing error:', error);
     // Still return 200 to prevent retries
-    res.status(200).json({ received: true, error: true });
+    res.status(200).json({ success: true });
   }
 });
 
 /**
- * Handle new order created
+ * Handle new order creation
  */
-async function handleOrderCreated(shopId, orderData) {
+async function handleNewOrder(supabase, data) {
   try {
-    const supabase = getSupabase();
+    const { order_id, shop_id } = data;
 
-    // Find shop by TikTok shop ID
+    // Get shop info
     const { data: shop } = await supabase
       .from('shops')
-      .select('*')
-      .eq('shop_id', shopId)
+      .select('id, user_id, access_token')
+      .eq('shop_id', shop_id)
       .single();
 
     if (!shop) {
-      logger.error(`Shop not found for TikTok ID: ${shopId}`);
+      logger.error('Shop not found for webhook:', shop_id);
       return;
     }
 
-    // Check if order already exists
-    const { data: existingOrder } = await supabase
-      .from('orders')
-      .select('id')
-      .eq('platform_order_id', orderData.order_id)
-      .single();
+    // Fetch full order details from TikTok API
+    const orderDetails = await tiktokService.getOrderDetails(
+      shop.access_token,
+      shop_id,
+      order_id
+    );
 
-    if (existingOrder) {
-      logger.info(`Order ${orderData.order_id} already exists`);
+    if (!orderDetails || !orderDetails.data) {
+      logger.error('Failed to fetch order details:', order_id);
       return;
     }
 
-    // Create order
-    const order = {
+    const order = orderDetails.data.order_list[0];
+
+    // Save order to database
+    const orderData = {
       shop_id: shop.id,
-      platform_order_id: orderData.order_id,
-      order_number: orderData.order_number || `#${orderData.order_id.slice(-6)}`,
-      customer_name: orderData.recipient_name,
-      customer_email: orderData.buyer_email,
-      customer_phone: orderData.recipient_phone,
-      shipping_address: {
-        line1: orderData.recipient_address,
-        city: orderData.recipient_city,
-        state: orderData.recipient_state,
-        zip: orderData.recipient_zipcode,
-        country: orderData.recipient_country || 'US'
-      },
-      items: orderData.item_list.map((item) => ({
-        product_id: item.product_id,
-        sku: item.sku_id,
-        name: item.product_name,
-        quantity: item.quantity,
-        price: item.sale_price,
-        image: item.product_image_url
-      })),
-      order_total: orderData.payment_total_amount,
-      currency: orderData.currency || 'USD',
-      status: 'pending',
-      platform_status: orderData.order_status,
-      platform_data: orderData,
-      priority: shop.is_live ? 'urgent' : 'normal'
+      order_id: order.order_id,
+      status: order.order_status,
+      total_amount: order.payment_info?.total_amount || 0,
+      currency: order.payment_info?.currency || 'USD',
+      buyer_email: order.buyer_info?.email || null,
+      buyer_name: order.buyer_info?.name || null,
+      shipping_address: order.recipient_address || {},
+      items: order.item_list || [],
+      tracking_number: order.tracking_number || null,
+      created_at: new Date(order.create_time * 1000),
+      updated_at: new Date(order.update_time * 1000),
+      print_status: 'pending',
+      raw_data: order
     };
 
-    const { data: savedOrder, error } = await supabase
+    const { data: newOrder, error } = await supabase
       .from('orders')
-      .insert(order)
+      .insert(orderData)
       .select()
       .single();
 
-    if (error) throw error;
-
-    // If shop is in live mode or auto-print enabled, print immediately
-    if (shop.is_live || shop.settings?.autoPrint) {
-      emitToShop(shop.id, 'instant-print', {
-        order: savedOrder,
-        priority: shop.is_live ? 'URGENT' : 'HIGH',
-        source: 'webhook'
-      });
-
-      logger.info(`🖨️ Instant print triggered for order ${order.order_number}`);
+    if (error) {
+      logger.error('Failed to save order:', error);
+      return;
     }
 
-    // Notify frontend
-    emitToShop(shop.id, 'new-order', savedOrder);
+    logger.info('New order saved:', newOrder.id);
 
-    // Update shop stats
-    await supabase.rpc('increment', {
-      table_name: 'shops',
-      column_name: 'total_orders',
-      row_id: shop.id
-    });
+    // Check if auto-print is enabled for this shop
+    const { data: shopSettings } = await supabase
+      .from('shop_settings')
+      .select('auto_print, default_template_id, default_printer_id')
+      .eq('shop_id', shop.id)
+      .single();
 
-    logger.info(`✅ Order ${order.order_number} created from webhook`);
+    if (shopSettings?.auto_print) {
+      // Add to print queue automatically
+      const { data: printJob } = await supabase
+        .from('print_queue')
+        .insert({
+          order_id: newOrder.id,
+          user_id: shop.user_id,
+          template_id: shopSettings.default_template_id,
+          printer_id: shopSettings.default_printer_id,
+          status: 'pending',
+          data: {
+            orderNumber: order.order_id,
+            buyer: order.buyer_info?.name,
+            address: order.recipient_address,
+            items: order.item_list
+          }
+        })
+        .select()
+        .single();
+
+      logger.info('Order added to print queue:', printJob.id);
+
+      // Update order print status
+      await supabase
+        .from('orders')
+        .update({ print_status: 'queued' })
+        .eq('id', newOrder.id);
+    }
+
+    // Emit real-time event
+    if (global.io) {
+      global.io.to(`user-${shop.user_id}`).emit('new-order', {
+        shopId: shop.id,
+        order: newOrder,
+        autoPrint: shopSettings?.auto_print || false
+      });
+    }
 
   } catch (error) {
-    logger.error('Failed to handle order created webhook:', error);
+    logger.error('Error handling new order:', error);
   }
 }
 
 /**
- * Handle order update
+ * Handle order status change
  */
-async function handleOrderUpdated(shopId, orderData) {
+async function handleOrderStatusChange(supabase, data) {
   try {
-    const supabase = getSupabase();
+    const { order_id, order_status, shop_id } = data;
+
+    // Update order status
+    const { error } = await supabase
+      .from('orders')
+      .update({
+        status: order_status,
+        updated_at: new Date()
+      })
+      .eq('order_id', order_id);
+
+    if (error) {
+      logger.error('Failed to update order status:', error);
+      return;
+    }
+
+    logger.info(`Order ${order_id} status updated to ${order_status}`);
+
+  } catch (error) {
+    logger.error('Error handling status change:', error);
+  }
+}
+
+/**
+ * Handle order shipped
+ */
+async function handleOrderShipped(supabase, data) {
+  try {
+    const { order_id, tracking_number, shipping_provider } = data;
 
     const { error } = await supabase
       .from('orders')
       .update({
-        platform_status: orderData.order_status,
-        platform_data: orderData,
-        updated_at: new Date().toISOString()
+        status: 'shipped',
+        tracking_number: tracking_number,
+        shipping_provider: shipping_provider,
+        shipped_at: new Date(),
+        updated_at: new Date()
       })
-      .eq('platform_order_id', orderData.order_id);
+      .eq('order_id', order_id);
 
-    if (error) throw error;
-
-    // Find the order to emit update
-    const { data: order } = await supabase
-      .from('orders')
-      .select('*, shop:shops(*)')
-      .eq('platform_order_id', orderData.order_id)
-      .single();
-
-    if (order && order.shop) {
-      // Notify frontend of update
-      emitToShop(order.shop.id, 'order-updated', order);
+    if (error) {
+      logger.error('Failed to update shipped order:', error);
+      return;
     }
 
-    logger.info(`Order ${orderData.order_id} updated via webhook`);
+    logger.info(`Order ${order_id} marked as shipped`);
 
   } catch (error) {
-    logger.error('Failed to handle order updated webhook:', error);
+    logger.error('Error handling order shipped:', error);
   }
 }
 
 /**
- * Handle order cancellation
+ * Handle order cancelled
  */
-async function handleOrderCancelled(shopId, orderData) {
+async function handleOrderCancelled(supabase, data) {
   try {
-    const supabase = getSupabase();
+    const { order_id, cancel_reason } = data;
 
     const { error } = await supabase
       .from('orders')
       .update({
         status: 'cancelled',
-        platform_status: 'cancelled',
-        updated_at: new Date().toISOString()
+        cancel_reason: cancel_reason,
+        cancelled_at: new Date(),
+        updated_at: new Date()
       })
-      .eq('platform_order_id', orderData.order_id);
+      .eq('order_id', order_id);
 
-    if (error) throw error;
-
-    // Find the order to emit update
-    const { data: order } = await supabase
-      .from('orders')
-      .select('*, shop:shops(*)')
-      .eq('platform_order_id', orderData.order_id)
-      .single();
-
-    if (order && order.shop) {
-      // Notify frontend of cancellation
-      emitToShop(order.shop.id, 'order-cancelled', order);
+    if (error) {
+      logger.error('Failed to update cancelled order:', error);
+      return;
     }
 
-    logger.info(`Order ${orderData.order_id} cancelled via webhook`);
+    logger.info(`Order ${order_id} cancelled`);
 
   } catch (error) {
-    logger.error('Failed to handle order cancelled webhook:', error);
+    logger.error('Error handling order cancellation:', error);
   }
 }
 
 /**
- * Handle live stream started
+ * @route   GET /api/webhooks/test
+ * @desc    Test webhook endpoint
+ * @access  Public
  */
-async function handleLiveStreamStarted(shopId, streamData) {
-  try {
-    const supabase = getSupabase();
-
-    // Update shop to live mode
-    const { error } = await supabase
-      .from('shops')
-      .update({
-        is_live: true,
-        live_stream_id: streamData.stream_id,
-        updated_at: new Date().toISOString()
-      })
-      .eq('shop_id', shopId);
-
-    if (error) throw error;
-
-    // Get shop details
-    const { data: shop } = await supabase
-      .from('shops')
-      .select('*')
-      .eq('shop_id', shopId)
-      .single();
-
-    if (shop) {
-      // Notify frontend
-      emitToShop(shop.id, 'live-stream-started', {
-        stream_id: streamData.stream_id,
-        started_at: new Date().toISOString()
-      });
-    }
-
-    logger.info(`Live stream started for shop ${shopId}`);
-
-  } catch (error) {
-    logger.error('Failed to handle live stream started:', error);
-  }
-}
-
-/**
- * Handle live stream ended
- */
-async function handleLiveStreamEnded(shopId, streamData) {
-  try {
-    const supabase = getSupabase();
-
-    // Update shop to normal mode
-    const { error } = await supabase
-      .from('shops')
-      .update({
-        is_live: false,
-        live_stream_id: null,
-        updated_at: new Date().toISOString()
-      })
-      .eq('shop_id', shopId);
-
-    if (error) throw error;
-
-    // Get shop details
-    const { data: shop } = await supabase
-      .from('shops')
-      .select('*')
-      .eq('shop_id', shopId)
-      .single();
-
-    if (shop) {
-      // Notify frontend
-      emitToShop(shop.id, 'live-stream-ended', {
-        stream_id: streamData.stream_id,
-        ended_at: new Date().toISOString()
-      });
-    }
-
-    logger.info(`Live stream ended for shop ${shopId}`);
-
-  } catch (error) {
-    logger.error('Failed to handle live stream ended:', error);
-  }
-}
+router.get('/test', (req, res) => {
+  res.json({
+    message: 'Webhook endpoint is working',
+    timestamp: new Date().toISOString()
+  });
+});
 
 module.exports = router;
