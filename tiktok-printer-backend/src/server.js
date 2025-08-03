@@ -6,6 +6,7 @@ const { initializeSupabase } = require('./config/supabase');
 const logger = require('./utils/logger');
 const { initWebSocket } = require('./services/websocket.service');
 const { startOrderPoller } = require('./workers/orderPoller');
+const { startPrintProcessor, scheduleCleanup } = require('./workers/printProcessor');
 
 // Create HTTP server
 const httpServer = createServer(app);
@@ -66,6 +67,14 @@ async function startServer() {
           logger.info('Order polling service started');
         } catch (pollerError) {
           logger.warn('Could not start order poller:', pollerError.message);
+        }
+
+        try {
+          startPrintProcessor();
+          scheduleCleanup();
+          logger.info('Print processor service started');
+        } catch (processorError) {
+          logger.warn('Could not start print processor:', processorError.message);
         }
       }
     });

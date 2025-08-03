@@ -6,6 +6,7 @@ const shopRoutes = require('./shop.routes');
 const orderRoutes = require('./order.routes');
 const templateRoutes = require('./template.routes');
 const webhookRoutes = require('./webhook.routes');
+const printerRoutes = require('./printer.routes');
 
 // Public routes
 router.use('/auth', authRoutes);
@@ -22,6 +23,7 @@ const { authenticate } = require('../middleware/auth.middleware');
 router.use('/shops', authenticate, shopRoutes);
 router.use('/orders', authenticate, orderRoutes);
 router.use('/templates', authenticate, templateRoutes);
+router.use('/printers', authenticate, printerRoutes);
 
 // API info endpoint
 router.get('/', (req, res) => {
@@ -33,6 +35,7 @@ router.get('/', (req, res) => {
       shops: '/api/shops',
       orders: '/api/orders',
       templates: '/api/templates',
+      printers: '/api/printers',
       webhooks: '/api/webhooks'
     }
   });
