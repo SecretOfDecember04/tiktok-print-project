@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { getSupabase } = require('../config/supabase');
 const { authenticate } = require('../middleware/auth.middleware');
+const { authRateLimiter } = require('../middleware/rateLimiter.middleware');
 const logger = require('../utils/logger');
 
 /**
@@ -8,7 +9,7 @@ const logger = require('../utils/logger');
  * @desc    Register user after Firebase Auth
  * @access  Public (but requires valid Firebase token)
  */
-router.post('/register', authenticate, async (req, res) => {
+router.post('/register', authRateLimiter, authenticate, async (req, res) => {
   try {
     const { fullName } = req.body;
     const { uid, email } = req.user;
@@ -160,7 +161,7 @@ router.get('/subscription', authenticate, async (req, res) => {
  * @desc    Get a test token for development
  * @access  Public (TEST ONLY)
  */
-router.post('/test-token', async (req, res) => {
+router.post('/test-token', authRateLimiter, async (req, res) => {
   const testToken = 'test-token-123';
   res.json({
     token: testToken,

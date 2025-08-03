@@ -1,5 +1,6 @@
 const { getSupabase } = require('../config/supabase');
 const { emitToShop } = require('./websocket.service');
+const PrintHistoryService = require('./printHistory.service');
 const logger = require('../utils/logger');
 
 class QueueService {
@@ -33,6 +34,21 @@ class QueueService {
       if (error) throw error;
 
       logger.info(`Print job added to queue: ${newJob.id}`);
+
+      // Log print job creation
+      try {
+        await PrintHistoryService.logPrintJobCreated({
+          jobId: newJob.id,
+          orderId: jobData.orderId,
+          userId: jobData.userId,
+          printerId: jobData.printerId,
+          templateId: jobData.templateId,
+          priority: jobData.priority,
+          data: jobData.data
+        });
+      } catch (historyError) {
+        logger.warn('Failed to log print job creation:', historyError.message);
+      }
 
       // Emit to desktop app for immediate processing
       emitToShop(jobData.shopId, 'new-print-job', newJob);
@@ -113,6 +129,18 @@ class QueueService {
 
       if (error) throw error;
 
+      // Log status change
+      try {
+        await PrintHistoryService.logStatusChange(
+          jobId,
+          originalJob.status,
+          status,
+          details
+        );
+      } catch (historyError) {
+        logger.warn('Failed to log status change:', historyError.message);
+      }
+
       // Update related order status
       if (status === 'completed') {
         await supabase
@@ -124,6 +152,36 @@ class QueueService {
           .eq('id', updatedJob.order_id);
 
         logger.info(`Order ${updatedJob.order_id} marked as printed`);
+
+        // Log print completion
+        try {
+          await PrintHistoryService.logPrintCompletion(jobId, true, {
+            processingTime: details.processingTime,
+            printTime: details.printTime,
+            totalPages: details.totalPages,
+            quality: details.quality
+          });
+        } catch (historyError) {
+          logger.warn('Failed to log print completion:', historyError.message);
+        }
+
+        // Trigger auto-fulfillment if enabled
+        try {
+          const FulfillmentService = require('./fulfillment.service');
+          await FulfillmentService.autoFulfillOrder(updatedJob.order_id);
+        } catch (fulfillmentError) {
+          logger.warn(`Auto-fulfillment failed for order ${updatedJob.order_id}:`, fulfillmentError.message);
+        }
+      } else if (status === 'failed') {
+        // Log print failure
+        try {
+          await PrintHistoryService.logPrintCompletion(jobId, false, {
+            errorMessage: details.errorMessage,
+            retryCount: updatedJob.retry_count
+          });
+        } catch (historyError) {
+          logger.warn('Failed to log print failure:', historyError.message);
+        }
       }
 
       // Emit status update

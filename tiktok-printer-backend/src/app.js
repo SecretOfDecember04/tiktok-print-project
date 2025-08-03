@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const compression = require('compression');
 const path = require('path');
+const { apiRateLimiter } = require('./middleware/rateLimiter.middleware');
 
 const routes = require('./routes');
 const errorMiddleware = require('./middleware/error.middleware');
@@ -27,6 +28,9 @@ app.use(cors({
 // Compression middleware
 app.use(compression());
 
+// Rate limiting middleware
+app.use('/api', apiRateLimiter);
+
 // Logging middleware
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
@@ -41,26 +45,16 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Static file serving for uploads
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    environment: process.env.NODE_ENV
-  });
-});
+// Health check endpoint with circuit breaker monitoring
+const ErrorHandler = require('./middleware/errorHandler.middleware');
+app.get('/health', ErrorHandler.healthCheck);
+app.get('/metrics/errors', ErrorHandler.errorMetrics);
 
 // API routes
 app.use('/api', routes);
 
 // 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    error: 'Not Found',
-    message: 'The requested resource does not exist'
-  });
-});
+app.use(ErrorHandler.notFound);
 
 // Global error handler (must be last)
 app.use(errorMiddleware);

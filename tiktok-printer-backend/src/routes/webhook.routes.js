@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { getSupabase } = require('../config/supabase');
 const tiktokService = require('../services/tiktok.service');
+const { webhookRateLimiter } = require('../middleware/rateLimiter.middleware');
 const logger = require('../utils/logger');
 
 /**
@@ -8,7 +9,7 @@ const logger = require('../utils/logger');
  * @desc    Receive order notifications from TikTok
  * @access  Public (but verified by signature)
  */
-router.post('/tiktok/orders', async (req, res) => {
+router.post('/tiktok/orders', webhookRateLimiter, async (req, res) => {
   try {
     const signature = req.headers['x-tts-signature'];
     const timestamp = req.headers['x-tts-timestamp'];

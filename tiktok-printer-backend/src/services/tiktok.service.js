@@ -193,6 +193,176 @@ class TikTokService {
   }
 
   /**
+   * Fulfill order (mark as shipped)
+   */
+  async fulfillOrder(accessToken, shopId, orderData) {
+    try {
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const path = '/fulfillment/202309/fulfillments';
+
+      const fulfillmentData = {
+        order_id: orderData.orderId,
+        tracking_number: orderData.trackingNumber,
+        shipping_provider: orderData.shippingProvider || 'OTHER',
+        fulfillment_line_items: orderData.items || []
+      };
+
+      const params = {
+        app_key: this.appKey,
+        timestamp: timestamp,
+        shop_id: shopId,
+        version: '202309'
+      };
+
+      // Generate signature
+      const signature = this.generateSignature(path, params, JSON.stringify(fulfillmentData));
+
+      const response = await axios.post(
+        `${this.apiBaseUrl}${path}`,
+        fulfillmentData,
+        {
+          params: {
+            ...params,
+            sign: signature
+          },
+          headers: {
+            'x-tts-access-token': accessToken,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      logger.info(`Order ${orderData.orderId} fulfilled successfully`);
+      return response.data;
+    } catch (error) {
+      logger.error('Order fulfillment failed:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get fulfillment details
+   */
+  async getFulfillment(accessToken, shopId, fulfillmentId) {
+    try {
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const path = `/fulfillment/202309/fulfillments/${fulfillmentId}`;
+
+      const params = {
+        app_key: this.appKey,
+        timestamp: timestamp,
+        shop_id: shopId,
+        version: '202309'
+      };
+
+      const signature = this.generateSignature(path, params, '');
+
+      const response = await axios.get(
+        `${this.apiBaseUrl}${path}`,
+        {
+          params: {
+            ...params,
+            sign: signature
+          },
+          headers: {
+            'x-tts-access-token': accessToken,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      logger.error('Get fulfillment failed:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Update tracking information
+   */
+  async updateTracking(accessToken, shopId, fulfillmentId, trackingData) {
+    try {
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const path = `/fulfillment/202309/fulfillments/${fulfillmentId}/tracking`;
+
+      const params = {
+        app_key: this.appKey,
+        timestamp: timestamp,
+        shop_id: shopId,
+        version: '202309'
+      };
+
+      const signature = this.generateSignature(path, params, JSON.stringify(trackingData));
+
+      const response = await axios.put(
+        `${this.apiBaseUrl}${path}`,
+        trackingData,
+        {
+          params: {
+            ...params,
+            sign: signature
+          },
+          headers: {
+            'x-tts-access-token': accessToken,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      logger.info(`Tracking updated for fulfillment ${fulfillmentId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Update tracking failed:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Cancel fulfillment
+   */
+  async cancelFulfillment(accessToken, shopId, fulfillmentId, reason) {
+    try {
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const path = `/fulfillment/202309/fulfillments/${fulfillmentId}/cancel`;
+
+      const cancelData = {
+        cancel_reason: reason
+      };
+
+      const params = {
+        app_key: this.appKey,
+        timestamp: timestamp,
+        shop_id: shopId,
+        version: '202309'
+      };
+
+      const signature = this.generateSignature(path, params, JSON.stringify(cancelData));
+
+      const response = await axios.post(
+        `${this.apiBaseUrl}${path}`,
+        cancelData,
+        {
+          params: {
+            ...params,
+            sign: signature
+          },
+          headers: {
+            'x-tts-access-token': accessToken,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      logger.info(`Fulfillment ${fulfillmentId} cancelled`);
+      return response.data;
+    } catch (error) {
+      logger.error('Cancel fulfillment failed:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Verify webhook signature
    */
   verifyWebhookSignature(signature, timestamp, body) {

@@ -5,6 +5,7 @@ const {
   uploadTemplateFile, 
   handleUploadError 
 } = require('../middleware/upload.middleware');
+const { uploadRateLimiter } = require('../middleware/rateLimiter.middleware');
 const UploadService = require('../services/upload.service');
 const logger = require('../utils/logger');
 
@@ -278,7 +279,7 @@ router.get('/default', async (req, res) => {
  * @desc    Upload template image
  * @access  Private
  */
-router.post('/upload-image', uploadTemplateImage, handleUploadError, async (req, res) => {
+router.post('/upload-image', uploadRateLimiter, uploadTemplateImage, handleUploadError, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
@@ -318,7 +319,7 @@ router.post('/upload-image', uploadTemplateImage, handleUploadError, async (req,
  * @desc    Upload template file (JSON)
  * @access  Private
  */
-router.post('/upload-file', uploadTemplateFile, handleUploadError, async (req, res) => {
+router.post('/upload-file', uploadRateLimiter, uploadTemplateFile, handleUploadError, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
