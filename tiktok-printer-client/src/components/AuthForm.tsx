@@ -62,6 +62,13 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
       >
         {mode === "login" ? "Login" : "Sign Up"}
       </button>
+      <button
+        type="button"
+        onClick={() => window.location.href = "/api/auth/oauth/google"}
+        className="border border-gray-400 rounded py-2 px-4 hover:bg-gray-100"
+        >
+        Continue with Google
+        </button>
     </form>
   );
 }
