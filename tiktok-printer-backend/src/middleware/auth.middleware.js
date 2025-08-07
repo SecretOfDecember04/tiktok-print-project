@@ -1,82 +1,37 @@
-const { getAuth } = require('../config/firebase');
-const logger = require('../utils/logger');
+const { createClient } = require('@supabase/supabase-js');
+const jwt = require('jsonwebtoken');
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
 
 async function authenticate(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'No token provided' });
+      return res.status(401).json({ error: 'no token provided' });
     }
 
     const token = authHeader.split('Bearer ')[1];
 
-    // ===== TEMPORARY TEST TOKEN - REMOVE IN PRODUCTION =====
-    if (token === 'test-token-123') {
-      req.user = {
-        uid: 'test-user-001',
-        email: 'test@example.com',
-        emailVerified: true
-      };
-      return next();
-    }
-    // ===== END OF TEST TOKEN =====
-
-    // Verify Firebase ID token
-    const decodedToken = await getAuth().verifyIdToken(token);
-
-    // Add user info to request
-    req.user = {
-      uid: decodedToken.uid,
-      email: decodedToken.email,
-      emailVerified: decodedToken.email_verified
-    };
-
-    next();
-  } catch (error) {
-    logger.error('Auth error:', error);
-
-    if (error.code === 'auth/id-token-expired') {
-      return res.status(401).json({ error: 'Token expired' });
-    }
-
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-}
-
-// Optional: Middleware to check if user is subscribed
-async function requireSubscription(req, res, next) {
-  try {
-    const { getSupabase } = require('../config/supabase');
-    const supabase = getSupabase();
-
-    const { data: user, error } = await supabase
-      .from('users')
-      .select('subscription_status, subscription_expires_at')
-      .eq('firebase_uid', req.user.uid)
-      .single();
+    // verify token with Supabase
+    const { data: { user }, error } = await supabase.auth.getUser(token);
 
     if (error || !user) {
-      return res.status(403).json({ error: 'User not found' });
+      return res.status(401).json({ error: 'invalid or expired token' });
     }
 
-    const now = new Date();
-    const expiresAt = new Date(user.subscription_expires_at);
-
-    if (user.subscription_status === 'active' ||
-        (user.subscription_status === 'trial' && expiresAt > now)) {
-      req.user.subscription = user;
-      next();
-    } else {
-      return res.status(403).json({ error: 'Subscription required' });
-    }
+    // attach user info to request
+    req.user = user;
+    next();
   } catch (error) {
-    logger.error('Subscription check error:', error);
-    return res.status(500).json({ error: 'Failed to verify subscription' });
+    console.error('auth middleware error:', error.message);
+    return res.status(500).json({ error: 'internal auth error' });
   }
 }
 
 module.exports = {
-  authenticate,
-  requireSubscription
+  authenticate
 };
