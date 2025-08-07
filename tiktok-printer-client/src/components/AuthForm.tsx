@@ -15,32 +15,38 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [error, setError] = useState("");
   const router = useRouter();
 
-  async function handleSubmit(e: React.FormEvent) {
+    async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
 
     const authFn =
-    mode === "login"
+        mode === "login"
         ? (credentials: { email: string; password: string }) =>
             supabase.auth.signInWithPassword(credentials)
         : (credentials: { email: string; password: string }) =>
-            supabase.auth.signUp({ ...credentials, options: {} }); 
+            supabase.auth.signUp({ ...credentials, options: {} });
 
-    const { data, error } = await authFn({
-      email,
-      password,
-    });
+    const { data, error } = await authFn({ email, password });
 
     if (error) {
-      setError(error.message);
-      return;
+        if (mode === "register" && error.message.toLowerCase().includes("user already registered")) {
+        setError("user already exists, please login instead");
+        } else if (mode === "login" && error.message.toLowerCase().includes("invalid login credentials")) {
+        setError("invalid email or password");
+        } else {
+        setError(error.message);
+        }
+        return;
     }
-    
 
-    localStorage.setItem("token", data.session?.access_token || "");
+    if (!data.session) {
+        setError("authentication failed, please try again");
+        return;
+    }
+
+    localStorage.setItem("token", data.session.access_token);
     router.push("/dashboard");
-  }
-
+    }
   async function handleGoogleOAuth() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
