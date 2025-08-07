@@ -20,9 +20,11 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
     setError("");
 
     const authFn =
-      mode === "login"
-        ? supabase.auth.signInWithPassword
-        : supabase.auth.signUp;
+    mode === "login"
+        ? (credentials: { email: string; password: string }) =>
+            supabase.auth.signInWithPassword(credentials)
+        : (credentials: { email: string; password: string }) =>
+            supabase.auth.signUp({ ...credentials, options: {} }); 
 
     const { data, error } = await authFn({
       email,
@@ -33,6 +35,7 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
       setError(error.message);
       return;
     }
+    
 
     localStorage.setItem("token", data.session?.access_token || "");
     router.push("/dashboard");
