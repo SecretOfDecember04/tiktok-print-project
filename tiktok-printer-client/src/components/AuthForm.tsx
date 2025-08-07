@@ -2,6 +2,12 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 export default function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [email, setEmail] = useState("");
@@ -13,22 +19,36 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
     e.preventDefault();
     setError("");
 
-    const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/register";
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+    const authFn =
+      mode === "login"
+        ? supabase.auth.signInWithPassword
+        : supabase.auth.signUp;
+
+    const { data, error } = await authFn({
+      email,
+      password,
     });
 
-    const data = await res.json();
-
-    if (!res.ok) {
-      setError(data?.message || "Something went wrong");
+    if (error) {
+      setError(error.message);
       return;
     }
 
-    localStorage.setItem("token", data.token);
+    localStorage.setItem("token", data.session?.access_token || "");
     router.push("/dashboard");
+  }
+
+  async function handleGoogleOAuth() {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: "http://localhost:3000/dashboard", 
+      },
+    });
+
+    if (error) {
+      setError(error.message);
+    }
   }
 
   return (
@@ -39,6 +59,7 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
       <h2 className="text-xl font-semibold text-center">
         {mode === "login" ? "Login" : "Sign Up"}
       </h2>
+
       <input
         type="email"
         placeholder="Email"
@@ -47,6 +68,7 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
         required
         className="border p-2 rounded w-full"
       />
+
       <input
         type="password"
         placeholder="Password"
@@ -55,20 +77,23 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
         required
         className="border p-2 rounded w-full"
       />
+
       {error && <p className="text-red-500 text-sm">{error}</p>}
+
       <button
         type="submit"
         className="bg-black text-white py-2 rounded hover:opacity-90"
       >
         {mode === "login" ? "Login" : "Sign Up"}
       </button>
+
       <button
         type="button"
-        onClick={() => window.location.href = "/api/auth/oauth/google"}
+        onClick={handleGoogleOAuth}
         className="border border-gray-400 rounded py-2 px-4 hover:bg-gray-100"
-        >
+      >
         Continue with Google
-        </button>
+      </button>
     </form>
   );
 }

@@ -4,17 +4,18 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const compression = require('compression');
 const path = require('path');
+
 const { apiRateLimiter } = require('./middleware/rateLimiter.middleware');
+const { errorHandler, notFound, healthCheck, errorMetrics } = require('./middleware/error.middleware');
 
 const routes = require('./routes');
-const errorMiddleware = require('./middleware/error.middleware');
 
 const app = express();
 
-// Security middleware
+// security
 app.use(helmet());
 
-// CORS configuration
+// cors
 app.use(cors({
   origin: [
     process.env.FRONTEND_URL,
@@ -25,38 +26,35 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Compression middleware
+// compression
 app.use(compression());
 
-// Rate limiting middleware
+// rate limiter
 app.use('/api', apiRateLimiter);
 
-// Logging middleware
+// logging
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 } else {
   app.use(morgan('combined'));
 }
 
-// Body parsing middleware
+// body parser
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Static file serving for uploads
+// uploads static
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-// Health check endpoint with circuit breaker monitoring
-const ErrorHandler = require('./middleware/errorHandler.middleware');
-app.get('/health', ErrorHandler.healthCheck);
-app.get('/metrics/errors', ErrorHandler.errorMetrics);
+// health check & metrics
+app.get('/health', healthCheck);
+app.get('/metrics/errors', errorMetrics);
 
-// API routes
+// routes
 app.use('/api', routes);
 
-// 404 handler
-app.use(ErrorHandler.notFound);
-
-// Global error handler (must be last)
-app.use(errorMiddleware);
+// 404 & error handler
+app.use(notFound);
+app.use(errorHandler);
 
 module.exports = app;
