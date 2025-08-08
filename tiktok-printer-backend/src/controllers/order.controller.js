@@ -70,6 +70,18 @@ class OrderController {
     }
   }
 
+  static async fetchLiveTikTokOrders(req, res) {
+    try {
+      const { shopId } = req.query;
+
+      const orders = await OrderService.getLiveOrdersFromTikTok(shopId);
+      res.json({ orders });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+
   /**
    * Get single order details
    */

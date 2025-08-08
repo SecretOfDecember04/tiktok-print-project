@@ -39,6 +39,36 @@ class OrderService {
     }
   }
 
+  static async getLiveOrdersFromTikTok(shopId) {
+    const supabase = getSupabase();
+
+    // fetch shop credentials
+    const { data: shop, error: shopError } = await supabase
+      .from('shops')
+      .select('*')
+      .eq('id', shopId)
+      .single();
+
+    if (shopError || !shop) {
+      throw new Error('shop not found');
+    }
+
+    // init TikTok service
+    const tiktokService = new TikTokService({
+      accessToken: shop.credentials.access_token,
+      shopId: shop.shop_id
+    });
+
+    // fetch orders from TikTok
+    const orders = await tiktokService.getOrders({
+      page_size: 20,
+      sort_field: 'create_time',
+      sort_order: 'DESC'
+    });
+
+    return orders;
+  }
+
   /**
    * Fetch orders from TikTok API and sync to database
    */
