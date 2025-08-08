@@ -2,12 +2,13 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import { auth } from "@/lib/firebase";
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+} from "firebase/auth";
 
 export default function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [email, setEmail] = useState("");
@@ -15,48 +16,42 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [error, setError] = useState("");
   const router = useRouter();
 
-    async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
 
-    const authFn =
+    try {
+      const userCredential =
         mode === "login"
-        ? (credentials: { email: string; password: string }) =>
-            supabase.auth.signInWithPassword(credentials)
-        : (credentials: { email: string; password: string }) =>
-            supabase.auth.signUp({ ...credentials, options: {} });
+          ? await signInWithEmailAndPassword(auth, email, password)
+          : await createUserWithEmailAndPassword(auth, email, password);
 
-    const { data, error } = await authFn({ email, password });
+      const token = await userCredential.user.getIdToken();
+      localStorage.setItem("token", token);
 
-    if (error) {
-        if (mode === "register" && error.message.toLowerCase().includes("user already registered")) {
+      router.push("/dashboard");
+    } catch (err: any) {
+      if (mode === "register" && err.code === "auth/email-already-in-use") {
         setError("user already exists, please login instead");
-        } else if (mode === "login" && error.message.toLowerCase().includes("invalid login credentials")) {
+      } else if (mode === "login" && err.code === "auth/invalid-credential") {
         setError("invalid email or password");
-        } else {
-        setError(error.message);
-        }
-        return;
+      } else {
+        setError(err.message);
+      }
     }
+  }
 
-    if (!data.session) {
-        setError("authentication failed, please try again");
-        return;
-    }
-
-    localStorage.setItem("token", data.session.access_token);
-    router.push("/dashboard");
-    }
   async function handleGoogleOAuth() {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: "http://localhost:3000/dashboard", 
-      },
-    });
+    try {
+      const provider = new GoogleAuthProvider();
+      const result = await signInWithPopup(auth, provider);
 
-    if (error) {
-      setError(error.message);
+      const token = await result.user.getIdToken();
+      localStorage.setItem("token", token);
+
+      router.push("/dashboard");
+    } catch (err: any) {
+      setError(err.message);
     }
   }
 
