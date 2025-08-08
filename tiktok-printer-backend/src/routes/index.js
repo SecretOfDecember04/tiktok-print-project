@@ -4,6 +4,10 @@ const router = require('express').Router();
 const authRoutes = require('./auth.routes');
 const webhookRoutes = require('./webhook.routes');
 
+const shopRoutes = require('./shop.routes'); 
+
+const { authenticate } = require('../middleware/auth.middleware');
+
 // public routes
 router.use('/auth', authRoutes);
 
@@ -20,7 +24,7 @@ router.use('/webhooks', webhookRoutes);
 // const { authenticate } = require('../middleware/auth.middleware');
 
 // router.use('/shops/callback/tiktok', shopRoutes);
-// router.use('/shops', authenticate, shopRoutes);
+router.use('/shops', authenticate, shopRoutes);
 // router.use('/orders', authenticate, orderRoutes);
 // router.use('/templates', authenticate, templateRoutes);
 // router.use('/printers', authenticate, printerRoutes);
@@ -33,7 +37,8 @@ router.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: {
       auth: '/api/auth',
-      webhooks: '/api/webhooks'
+      webhooks: '/api/webhooks',
+      shops: '/api/shops'
     }
   });
 });

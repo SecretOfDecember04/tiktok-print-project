@@ -1,37 +1,38 @@
-const { createClient } = require('@supabase/supabase-js');
-const jwt = require('jsonwebtoken');
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+// src/middleware/auth.middleware.js
+const { getAuth } = require('../config/firebase');
 
 async function authenticate(req, res, next) {
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    const h = req.headers.authorization || '';
+    if (!h.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'no token provided' });
     }
+    const idToken = h.slice('Bearer '.length);
 
-    const token = authHeader.split('Bearer ')[1];
-
-    // verify token with Supabase
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-
-    if (error || !user) {
-      return res.status(401).json({ error: 'invalid or expired token' });
+    try {
+      const [headerB64] = idToken.split('.');
+      const header = JSON.parse(Buffer.from(headerB64, 'base64').toString('utf8'));
+      if (!header.kid) {
+        return res.status(401).json({
+          error: 'invalid token type',
+          hint: 'This is not a Firebase ID token. Make sure to send user.getIdToken().',
+        });
+      }
+    } catch (_) {
+      // 忽略，交给 verifyIdToken 去报错
     }
 
-    // attach user info to request
-    req.user = user;
+    const decoded = await getAuth().verifyIdToken(idToken);
+    req.user = {
+      uid: decoded.uid,
+      email: decoded.email,
+      emailVerified: decoded.email_verified,
+    };
     next();
-  } catch (error) {
-    console.error('auth middleware error:', error.message);
-    return res.status(500).json({ error: 'internal auth error' });
+  } catch (err) {
+    console.error('firebase auth error:', err.message);
+    return res.status(401).json({ error: 'unauthorized' });
   }
 }
 
-module.exports = {
-  authenticate
-};
+module.exports = { authenticate };

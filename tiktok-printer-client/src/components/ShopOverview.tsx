@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { auth } from "@/lib/firebase";
 
 interface ShopStats {
   totalOrders: number;
@@ -78,6 +79,44 @@ export default function ShopOverview() {
       console.error("Failed to print order:", err);
     }
   };
+    
+
+  const handleConnectTikTok = async () => {
+    try {
+      const idToken = await auth.currentUser?.getIdToken(true);
+      if (!idToken) {
+        alert("请先登录");
+        return;
+      }
+      console.log("idToken len=", idToken.length, idToken.slice(0, 12));
+
+      const base = process.env.NEXT_PUBLIC_API_BASE_URL!;
+      const res = await fetch(`${base}/shops/connect`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`, 
+        },
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        console.error("connect failed:", res.status, text);
+        alert(`连接失败 (${res.status})`);
+        return;
+      }
+
+      const data = await res.json();
+      if (data?.authUrl) {
+        window.location.href = data.authUrl; 
+      } else {
+        console.error("no authUrl in response", data);
+        alert("获取授权地址失败");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("连接 TikTok 失败");
+    }
+  };
 
   const statCards = [
     {
@@ -144,6 +183,15 @@ export default function ShopOverview() {
         <p className="text-gray-600 mt-2">
           Welcome back! Here's what's happening with your shop today.
         </p>
+      </div>
+
+      <div className="flex justify-end">
+        <button
+          onClick={handleConnectTikTok}
+          className="bg-black text-white px-4 py-2 rounded hover:opacity-90"
+        >
+          Connect TikTok Shop
+        </button>
       </div>
 
       {/* Platform Selector */}
