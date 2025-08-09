@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { auth } from "@/lib/firebase";
+import CountUp from "@/components/CountUp";
 
 interface ShopStats {
   totalOrders: number;
@@ -107,11 +108,12 @@ export default function ShopOverview() {
   }
 
   const statCards = [
-    { title: "Total Orders",   value: stats?.totalOrders ?? 0,                     icon: "📦", from: "#25F4EE", to: "#A155B9" },
-    { title: "Pending Orders", value: stats?.pendingOrders ?? 0,                   icon: "⏳", from: "#FE2C55", to: "#A155B9" },
-    { title: "Revenue",        value: stats ? `$${stats.revenue.toFixed(2)}` : 0, icon: "💰", from: "#25F4EE", to: "#FE2C55" },
-    { title: "Customers",      value: stats?.customers ?? 0,                       icon: "👥", from: "#A155B9", to: "#25F4EE" },
-  ];
+    { title: "Total Orders",   value: stats?.totalOrders ?? 0, icon: "📦", from: "#25F4EE", to: "#A155B9" },
+    { title: "Pending Orders", value: stats?.pendingOrders ?? 0, icon: "⏳", from: "#FE2C55", to: "#A155B9" },
+    // 注意：这里把 revenue 的 value 改为数字，格式交给 CountUp 处理
+    { title: "Revenue",        value: stats?.revenue ?? 0,      icon: "💰", from: "#25F4EE", to: "#FE2C55" },
+    { title: "Customers",      value: stats?.customers ?? 0,    icon: "👥", from: "#A155B9", to: "#25F4EE" },
+  ] as const;
 
   const platforms = [
     { id: "all",    name: "All Platforms", icon: "🌐" },
@@ -185,7 +187,13 @@ export default function ShopOverview() {
                 </div>
               </div>
               <h3 className="text-white/70 text-sm">{card.title}</h3>
-              <p className="text-2xl font-bold mt-1">{card.value}</p>
+              <p className="text-2xl font-bold mt-1">
+                {card.title === "Revenue" ? (
+                  <CountUp value={card.value} decimals={2} prefix="$" duration={1200} />
+                ) : (
+                  <CountUp value={card.value} duration={900} />
+                )}
+              </p>
             </div>
           ))}
         </div>
