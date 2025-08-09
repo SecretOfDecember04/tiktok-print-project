@@ -1,15 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "TikTok Print Dashboard",
@@ -22,8 +12,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+    <html lang="en" className="h-full">
+      {/* tik-app: 应用五彩斑斓黑主题背景与 TikTok Sans；antialiased: 抗锯齿 */}
+      <body className="tik-app antialiased min-h-screen">
         {children}
       </body>
     </html>
