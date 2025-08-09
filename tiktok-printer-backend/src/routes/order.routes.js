@@ -68,6 +68,10 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
+
+router.get('/tiktok/live-orders', OrderController.fetchLiveTikTokOrders);
+
+
 /**
  * @route   POST /api/orders/sync/:shopId
  * @desc    Manually sync orders from TikTok for a specific shop

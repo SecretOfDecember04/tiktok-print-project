@@ -2,64 +2,118 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { auth } from "@/lib/firebase";
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+} from "firebase/auth";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:5050/api";
 
 export default function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const router = useRouter();
 
-    async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
+  async function persistUserToBackend(idToken: string, fullName?: string) {
+    try {
+      const res = await fetch(`${API_BASE}/auth/register`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          fullName: fullName || email.split("@")[0],
+        }),
+      });
 
-    const authFn =
-        mode === "login"
-        ? (credentials: { email: string; password: string }) =>
-            supabase.auth.signInWithPassword(credentials)
-        : (credentials: { email: string; password: string }) =>
-            supabase.auth.signUp({ ...credentials, options: {} });
-
-    const { data, error } = await authFn({ email, password });
-
-    if (error) {
-        if (mode === "register" && error.message.toLowerCase().includes("user already registered")) {
-        setError("user already exists, please login instead");
-        } else if (mode === "login" && error.message.toLowerCase().includes("invalid login credentials")) {
-        setError("invalid email or password");
-        } else {
-        setError(error.message);
-        }
-        return;
-    }
-
-    if (!data.session) {
-        setError("authentication failed, please try again");
-        return;
-    }
-
-    localStorage.setItem("token", data.session.access_token);
-    router.push("/dashboard");
-    }
-  async function handleGoogleOAuth() {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: "http://localhost:3000/dashboard", 
-      },
-    });
-
-    if (error) {
-      setError(error.message);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        console.warn("register fallback:", data?.error || res.statusText);
+      }
+    } catch (e) {
+      console.warn("register request failed (ignored):", (e as any)?.message);
     }
   }
 
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setSubmitting(true);
+
+    try {
+      const userCredential =
+        mode === "login"
+          ? await signInWithEmailAndPassword(auth, email, password)
+          : await createUserWithEmailAndPassword(auth, email, password);
+
+      const idToken = await userCredential.user.getIdToken(true);
+
+      localStorage.removeItem("token");
+      localStorage.setItem("fb_id_token", idToken);
+
+      console.log(
+        `${mode} ID token:`,
+        idToken.slice(0, 8) + "..." + idToken.slice(-8)
+      );
+
+      if (mode === "register") {
+        await persistUserToBackend(idToken);
+      }
+
+      router.push("/dashboard");
+    } catch (err: any) {
+      if (mode === "register" && err.code === "auth/email-already-in-use") {
+        setError("user already exists, please login instead");
+      } else if (mode === "login" && err.code === "auth/invalid-credential") {
+        setError("invalid email or password");
+      } else {
+        setError(err?.message || "authentication failed");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+    async function handleGoogleOAuth() {
+    setError("");
+    setSubmitting(true);
+
+    try {
+        const provider = new GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: "select_account" });
+
+        const result = await signInWithPopup(auth, provider);
+        const idToken = await result.user.getIdToken(true);
+
+        localStorage.removeItem("token");
+        localStorage.setItem("fb_id_token", idToken);
+
+        console.log(
+        "Google OAuth token:",
+        idToken.slice(0, 8) + "..." + idToken.slice(-8)
+        );
+
+        await persistUserToBackend(idToken, result.user.displayName || undefined);
+
+        router.push("/dashboard");
+    } catch (err: any) {
+        if (err?.code === "auth/popup-closed-by-user") {
+        setError("login popup closed, please try again");
+        } else if (err?.code === "auth/cancelled-popup-request") {
+        setError("another login is in progress, please wait");
+        } else {
+        setError(err?.message || "Google sign-in failed");
+        }
+    } finally {
+        setSubmitting(false);
+    }
+    }
   return (
     <form
       onSubmit={handleSubmit}
@@ -73,6 +127,7 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
         type="email"
         placeholder="Email"
         value={email}
+        disabled={submitting}
         onChange={(e) => setEmail(e.target.value)}
         required
         className="border p-2 rounded w-full"
@@ -82,6 +137,7 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
         type="password"
         placeholder="Password"
         value={password}
+        disabled={submitting}
         onChange={(e) => setPassword(e.target.value)}
         required
         className="border p-2 rounded w-full"
@@ -91,15 +147,23 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
 
       <button
         type="submit"
-        className="bg-black text-white py-2 rounded hover:opacity-90"
+        disabled={submitting}
+        className="bg-black text-white py-2 rounded hover:opacity-90 disabled:opacity-60"
       >
-        {mode === "login" ? "Login" : "Sign Up"}
+        {submitting
+          ? mode === "login"
+            ? "Logging in..."
+            : "Signing up..."
+          : mode === "login"
+          ? "Login"
+          : "Sign Up"}
       </button>
 
       <button
         type="button"
+        disabled={submitting}
         onClick={handleGoogleOAuth}
-        className="border border-gray-400 rounded py-2 px-4 hover:bg-gray-100"
+        className="border border-gray-400 rounded py-2 px-4 hover:bg-gray-100 disabled:opacity-60"
       >
         Continue with Google
       </button>
